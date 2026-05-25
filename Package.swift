@@ -21,6 +21,8 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
+                .linkedFramework("QuickLookThumbnailing"),
+                .linkedFramework("Quartz"),
                 .linkedFramework("QuartzCore")
             ]
         ),

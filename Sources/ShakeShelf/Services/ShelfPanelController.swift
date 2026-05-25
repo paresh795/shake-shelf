@@ -15,6 +15,7 @@ final class ShelfPanelController {
         let panel = panel ?? makePanel(shelfView: shelfView)
         self.panel = panel
 
+        resize(panel, to: shelfView.preferredSize, animate: false)
         position(panel, near: point)
         panel.orderFrontRegardless()
         panel.makeKey()
@@ -27,7 +28,7 @@ final class ShelfPanelController {
 
     private func makePanel(shelfView: ShelfView) -> NSPanel {
         let panel = ShelfPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 270, height: 230),
+            contentRect: NSRect(origin: .zero, size: ShelfView.compactSize),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -41,8 +42,33 @@ final class ShelfPanelController {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.contentView = shelfView
+        shelfView.onPreferredSizeChange = { [weak self, weak panel] size in
+            guard let self, let panel else { return }
+            self.resize(panel, to: size, animate: true)
+        }
 
         return panel
+    }
+
+    private func resize(_ panel: NSPanel, to size: NSSize, animate: Bool) {
+        let currentFrame = panel.frame
+        let center = CGPoint(x: currentFrame.midX, y: currentFrame.midY)
+        var nextFrame = NSRect(
+            x: center.x - (size.width / 2),
+            y: center.y - (size.height / 2),
+            width: size.width,
+            height: size.height
+        )
+
+        let visibleFrame = NSScreen.screens.first { $0.frame.intersects(currentFrame) }?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        nextFrame.origin.x = max(visibleFrame.minX + 10, min(nextFrame.origin.x, visibleFrame.maxX - size.width - 10))
+        nextFrame.origin.y = max(visibleFrame.minY + 10, min(nextFrame.origin.y, visibleFrame.maxY - size.height - 10))
+
+        panel.contentView?.setFrameSize(size)
+        panel.setFrame(nextFrame, display: true, animate: animate)
     }
 
     private func position(_ panel: NSPanel, near point: CGPoint) {
