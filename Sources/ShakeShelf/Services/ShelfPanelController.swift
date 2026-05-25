@@ -17,6 +17,8 @@ final class ShelfPanelController {
 
         position(panel, near: point)
         panel.orderFrontRegardless()
+        panel.makeKey()
+        panel.makeFirstResponder(shelfView)
 
         if ephemeral {
             armReleaseWatcher()
@@ -24,7 +26,7 @@ final class ShelfPanelController {
     }
 
     private func makePanel(shelfView: ShelfView) -> NSPanel {
-        let panel = NSPanel(
+        let panel = ShelfPanel(
             contentRect: NSRect(x: 0, y: 0, width: 270, height: 230),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
@@ -84,10 +86,25 @@ final class ShelfPanelController {
             guard let self else { return }
 
             if self.pendingEmptyShelf, self.shelfView?.urls.isEmpty == true {
+                if self.shelfView?.isReceivingExternalDrop == true {
+                    self.handleDragRelease()
+                    return
+                }
+
                 self.panel?.orderOut(nil)
             }
 
             self.pendingEmptyShelf = false
         }
+    }
+}
+
+private final class ShelfPanel: NSPanel {
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        false
     }
 }

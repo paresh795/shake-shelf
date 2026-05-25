@@ -16,6 +16,9 @@ let package = Package(
         .executableTarget(
             name: "ShakeShelf",
             dependencies: ["ShakeShelfCore"],
+            resources: [
+                .process("Resources")
+            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("QuartzCore")

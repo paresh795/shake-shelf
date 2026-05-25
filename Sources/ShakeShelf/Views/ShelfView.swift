@@ -1,4 +1,5 @@
 import AppKit
+import ShakeShelfCore
 import UniformTypeIdentifiers
 
 @MainActor
@@ -17,19 +18,36 @@ final class ShelfView: NSView, NSDraggingSource {
 
     private let filenamesPasteboardType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
     private let cornerRadius: CGFloat = 22
+    private lazy var externalFileStore = ShelfFileStore(
+        baseDirectory: (try? ShelfFileStore.defaultIncomingDirectory())
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("Shake Shelf/Incoming", isDirectory: true)
+    )
     private var isExpanded = false
     private var pendingDragURLs: [URL] = []
+    private var pendingExternalDrops = 0
     private var windowDragState: WindowDragState?
+    private var selectedURL: URL?
+    private var copyStatus: String?
+    private var copyStatusToken: UUID?
     private var previewCache: [String: FilePreview] = [:]
+
+    var isReceivingExternalDrop: Bool {
+        pendingExternalDrops > 0
+    }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 270, height: 230))
         wantsLayer = true
-        registerForDraggedTypes([.fileURL, filenamesPasteboardType])
+        let promisedFileTypes = NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+        registerForDraggedTypes([.fileURL, filenamesPasteboardType, .png, .tiff] + promisedFileTypes)
     }
 
     required init?(coder: NSCoder) {
@@ -39,7 +57,9 @@ final class ShelfView: NSView, NSDraggingSource {
     override func draw(_ dirtyRect: NSRect) {
         drawBackground()
 
-        if urls.isEmpty {
+        if urls.isEmpty, isReceivingExternalDrop {
+            drawReceivingState()
+        } else if urls.isEmpty {
             drawEmptyState()
         } else if isExpanded {
             drawExpandedList()
@@ -49,25 +69,46 @@ final class ShelfView: NSView, NSDraggingSource {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        readFileURLs(from: sender.draggingPasteboard).isEmpty ? [] : .generic
+        canReadDrop(from: sender.draggingPasteboard) ? .copy : []
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        readFileURLs(from: sender.draggingPasteboard).isEmpty ? [] : .generic
+        canReadDrop(from: sender.draggingPasteboard) ? .copy : []
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let dropped = readFileURLs(from: sender.draggingPasteboard)
-        add(dropped)
-        return !dropped.isEmpty
+        let pasteboard = sender.draggingPasteboard
+
+        let dropped = readFileURLs(from: pasteboard)
+        if !dropped.isEmpty {
+            add(dropped)
+            return true
+        }
+
+        let imageURLs = storeRawImages(from: pasteboard)
+        if !imageURLs.isEmpty {
+            add(imageURLs)
+            return true
+        }
+
+        let promisedFiles = readFilePromises(from: pasteboard)
+        if !promisedFiles.isEmpty {
+            return receivePromisedFiles(promisedFiles)
+        }
+
+        logUnsupportedDrop(from: pasteboard)
+        return false
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+
         let point = convert(event.locationInWindow, from: nil)
         pendingDragURLs = []
 
         if toggleRect.contains(point), urls.count > 1 {
             isExpanded.toggle()
+            selectedURL = nil
             needsDisplay = true
             return
         }
@@ -78,13 +119,17 @@ final class ShelfView: NSView, NSDraggingSource {
         }
 
         if headerDragRect.contains(point), let window {
+            selectedURL = nil
             windowDragState = WindowDragState(mouseStart: NSEvent.mouseLocation, windowStart: window.frame.origin)
             return
         }
 
         if isExpanded, let url = rowHit(at: point) {
+            selectedURL = url
             pendingDragURLs = [url]
+            needsDisplay = true
         } else if stackRect.contains(point), !urls.isEmpty {
+            selectedURL = nil
             pendingDragURLs = existing(urls)
         }
     }
@@ -109,6 +154,43 @@ final class ShelfView: NSView, NSDraggingSource {
         pendingDragURLs = []
     }
 
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isCopy = modifierFlags == .command && event.charactersIgnoringModifiers?.lowercased() == "c"
+
+        if isCopy, copyCurrentSelectionToPasteboard() {
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard !existing(urls).isEmpty else { return nil }
+
+        let menu = NSMenu()
+        let point = convert(event.locationInWindow, from: nil)
+
+        if isExpanded, let rowURL = rowHit(at: point) {
+            selectedURL = rowURL
+            needsDisplay = true
+
+            let copySelectedItem = NSMenuItem(title: "Copy This File", action: #selector(copyCurrentSelection(_:)), keyEquivalent: "")
+            copySelectedItem.target = self
+            menu.addItem(copySelectedItem)
+
+            let copyAllItem = NSMenuItem(title: "Copy All Files", action: #selector(copyAllFiles(_:)), keyEquivalent: "")
+            copyAllItem.target = self
+            menu.addItem(copyAllItem)
+        } else {
+            let copyItem = NSMenuItem(title: "Copy All Files", action: #selector(copyAllFiles(_:)), keyEquivalent: "")
+            copyItem.target = self
+            menu.addItem(copyItem)
+        }
+
+        return menu
+    }
+
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         .copy
     }
@@ -131,6 +213,7 @@ final class ShelfView: NSView, NSDraggingSource {
         guard !accepted.isEmpty else { return }
         urls.append(contentsOf: accepted)
         isExpanded = false
+        selectedURL = nil
         needsDisplay = true
     }
 
@@ -190,6 +273,20 @@ final class ShelfView: NSView, NSDraggingSource {
         drawCentered("Release files", detail: "This shelf will stay if something lands here.", in: dropRect)
     }
 
+    private func drawReceivingState() {
+        drawHeader(subtitle: "Receiving...")
+
+        let dropRect = bounds.insetBy(dx: 18, dy: 58)
+        let path = NSBezierPath(roundedRect: dropRect, xRadius: 16, yRadius: 16)
+        NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
+        path.fill()
+        NSColor.controlAccentColor.withAlphaComponent(0.55).setStroke()
+        path.lineWidth = 1.2
+        path.stroke()
+
+        drawCentered("Receiving file", detail: "Keep this shelf open for a moment.", in: dropRect)
+    }
+
     private func drawHeader(subtitle: String) {
         let titleAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 16, weight: .bold),
@@ -197,11 +294,21 @@ final class ShelfView: NSView, NSDraggingSource {
         ]
         "Shake Shelf".draw(at: CGPoint(x: 18, y: 14), withAttributes: titleAttributes)
 
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+
         let detailAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: NSColor.secondaryLabelColor
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph
         ]
-        subtitle.draw(at: CGPoint(x: 116, y: 18), withAttributes: detailAttributes)
+        let subtitleRect = NSRect(
+            x: 116,
+            y: 18,
+            width: max(0, toggleRect.minX - 124),
+            height: 16
+        )
+        subtitle.draw(in: subtitleRect, withAttributes: detailAttributes)
 
         drawIconButton(rect: closeRect, title: "xmark")
 
@@ -226,16 +333,30 @@ final class ShelfView: NSView, NSDraggingSource {
         }
 
         drawBadge("\(urls.count)", at: CGPoint(x: stackRect.maxX - 18, y: stackRect.minY - 2))
-        drawCentered("Drag stack for all files", detail: "Use the list button for one file.", in: NSRect(x: 16, y: bounds.maxY - 52, width: bounds.width - 32, height: 36))
+        drawCentered(
+            copyStatus ?? "Drag stack for all files",
+            detail: copyStatus == nil ? "Use list for one file. Cmd-C copies all." : "Paste in Finder with Cmd-V.",
+            in: NSRect(x: 16, y: bounds.maxY - 52, width: bounds.width - 32, height: 36)
+        )
     }
 
     private func drawExpandedList() {
-        drawHeader(subtitle: "Drag one row")
+        drawHeader(subtitle: "List")
 
         for (url, rect) in rowRects() {
             let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
-            NSColor.controlBackgroundColor.withAlphaComponent(0.75).setFill()
+            if selectedURL == url {
+                NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
+            } else {
+                NSColor.controlBackgroundColor.withAlphaComponent(0.75).setFill()
+            }
             path.fill()
+
+            if selectedURL == url {
+                NSColor.controlAccentColor.withAlphaComponent(0.70).setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
 
             drawPreview(for: url, in: NSRect(x: rect.minX + 8, y: rect.minY + 6, width: 22, height: 22), cornerRadius: 4)
 
@@ -421,6 +542,153 @@ final class ShelfView: NSView, NSDraggingSource {
             guard !seen.contains(path) else { return false }
             seen.insert(path)
             return true
+        }
+    }
+
+    private func canReadDrop(from pasteboard: NSPasteboard) -> Bool {
+        !readFilePromises(from: pasteboard).isEmpty
+            || !readFileURLs(from: pasteboard).isEmpty
+            || !rawImagePayloads(from: pasteboard).isEmpty
+    }
+
+    private func readFilePromises(from pasteboard: NSPasteboard) -> [NSFilePromiseReceiver] {
+        pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self], options: nil) as? [NSFilePromiseReceiver] ?? []
+    }
+
+    private func receivePromisedFiles(_ promises: [NSFilePromiseReceiver]) -> Bool {
+        do {
+            let destination = try externalFileStore.ensureBaseDirectory()
+            pendingExternalDrops += promises.count
+            needsDisplay = true
+
+            for promise in promises {
+                promise.receivePromisedFiles(
+                    atDestination: destination,
+                    options: [:],
+                    operationQueue: .main
+                ) { [weak self] url, error in
+                    if let error {
+                        NSLog("Shake Shelf failed to receive promised file: \(error.localizedDescription)")
+                    }
+
+                    let receivedURL = error == nil ? url.standardizedFileURL : nil
+                    self?.finishReceivingPromisedFile(receivedURL)
+                }
+            }
+
+            return true
+        } catch {
+            NSLog("Shake Shelf failed to create promised-file destination: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func finishReceivingPromisedFile(_ url: URL?) {
+        pendingExternalDrops = max(0, pendingExternalDrops - 1)
+
+        if let url {
+            add([url])
+        } else {
+            needsDisplay = true
+        }
+    }
+
+    private func storeRawImages(from pasteboard: NSPasteboard) -> [URL] {
+        rawImagePayloads(from: pasteboard).compactMap { payload in
+            do {
+                return try externalFileStore.store(
+                    data: payload.data,
+                    preferredExtension: payload.pathExtension,
+                    suggestedName: "Dropped Image"
+                )
+            } catch {
+                NSLog("Shake Shelf failed to store raw image drop: \(error.localizedDescription)")
+                return nil
+            }
+        }
+    }
+
+    private func rawImagePayloads(from pasteboard: NSPasteboard) -> [(data: Data, pathExtension: String)] {
+        let acceptedTypes: [(type: NSPasteboard.PasteboardType, pathExtension: String)] = [
+            (.png, "png"),
+            (.tiff, "tiff")
+        ]
+
+        return pasteboard.pasteboardItems?.compactMap { item in
+            for acceptedType in acceptedTypes {
+                guard let type = item.availableType(from: [acceptedType.type]),
+                      let data = item.data(forType: type),
+                      !data.isEmpty else {
+                    continue
+                }
+
+                return (data, acceptedType.pathExtension)
+            }
+
+            return nil
+        } ?? []
+    }
+
+    private func logUnsupportedDrop(from pasteboard: NSPasteboard) {
+        let types = pasteboard.types?.map(\.rawValue).joined(separator: ", ") ?? "none"
+        let itemTypes = pasteboard.pasteboardItems?
+            .map { item in item.types.map(\.rawValue).joined(separator: "|") }
+            .joined(separator: ", ") ?? "none"
+        NSLog("Shake Shelf unsupported drop. Pasteboard types: \(types). Item types: \(itemTypes)")
+    }
+
+    @discardableResult
+    private func copyCurrentSelectionToPasteboard() -> Bool {
+        let existingURLs = existing(urls)
+        let existingSelectedURL = selectedURL.flatMap { selected in
+            existingURLs.contains(selected) ? selected : nil
+        }
+        let fileURLs = ShelfCopyResolver.urlsToCopy(
+            allURLs: existingURLs,
+            selectedURL: existingSelectedURL,
+            isExpanded: isExpanded
+        )
+
+        return copyToPasteboard(fileURLs)
+    }
+
+    private func copyAllFilesToPasteboard() -> Bool {
+        copyToPasteboard(existing(urls))
+    }
+
+    private func copyToPasteboard(_ fileURLs: [URL]) -> Bool {
+        guard !fileURLs.isEmpty else { return false }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+
+        guard pasteboard.writeObjects(fileURLs.map { $0 as NSURL }) else {
+            return false
+        }
+
+        showCopyConfirmation(fileCount: fileURLs.count)
+        return true
+    }
+
+    @objc private func copyCurrentSelection(_ sender: Any?) {
+        _ = copyCurrentSelectionToPasteboard()
+    }
+
+    @objc private func copyAllFiles(_ sender: Any?) {
+        _ = copyAllFilesToPasteboard()
+    }
+
+    private func showCopyConfirmation(fileCount: Int) {
+        let token = UUID()
+        copyStatusToken = token
+        copyStatus = "Copied \(fileCount) file\(fileCount == 1 ? "" : "s")"
+        needsDisplay = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            guard let self, self.copyStatusToken == token else { return }
+            self.copyStatus = nil
+            self.copyStatusToken = nil
+            self.needsDisplay = true
         }
     }
 

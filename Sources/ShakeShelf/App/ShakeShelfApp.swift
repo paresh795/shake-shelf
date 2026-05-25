@@ -13,10 +13,12 @@ enum ShakeShelfApp {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private let didShowWelcomeKey = "didShowWelcome"
     private let shelfController = ShelfPanelController()
     private let shakeMonitor = DragShakeMonitor()
-    private var controlWindow: NSWindow?
+    private var welcomeWindow: NSWindow?
+    private var markWelcomeOnClose = false
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -27,9 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         shakeMonitor.start()
 
-        if ProcessInfo.processInfo.environment["SHAKE_SHELF_SHOW_CONTROL"] == "1" {
-            showControlWindow()
-            NSApp.activate(ignoringOtherApps: true)
+        if ProcessInfo.processInfo.environment["SHAKE_SHELF_SHOW_WELCOME"] == "1"
+            || !UserDefaults.standard.bool(forKey: didShowWelcomeKey) {
+            showWelcomeWindow(markAsShownOnClose: true)
         }
     }
 
@@ -58,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showShelf.target = self
         menu.addItem(showShelf)
 
+        let showWelcome = NSMenuItem(title: "Show Welcome", action: #selector(showWelcomeFromMenu), keyEquivalent: "")
+        showWelcome.target = self
+        menu.addItem(showWelcome)
+
         let quit = NSMenuItem(title: "Quit Shake Shelf", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -70,17 +76,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shelfController.showShelf(near: NSEvent.mouseLocation, ephemeral: false)
     }
 
+    @objc private func showWelcomeFromMenu() {
+        showWelcomeWindow(markAsShownOnClose: false)
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
 
-    private func showControlWindow() {
+    private func showWelcomeWindow(markAsShownOnClose: Bool) {
+        if let welcomeWindow {
+            welcomeWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
         NSApp.setActivationPolicy(.regular)
 
-        let controller = ControlWindowController(
-            monitor: shakeMonitor,
+        let controller = WelcomeWindowController(
             onShowShelf: { [weak self] in
                 self?.shelfController.showShelf(near: NSEvent.mouseLocation, ephemeral: false)
+            },
+            onDone: { [weak self] in
+                self?.closeWelcomeWindow(markAsShown: markAsShownOnClose)
             }
         )
 
@@ -92,8 +110,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.title = "Shake Shelf"
         window.center()
-        window.contentView = controller.view
+        window.contentViewController = controller
+        window.delegate = self
         window.makeKeyAndOrderFront(nil)
-        controlWindow = window
+        window.isReleasedWhenClosed = false
+        welcomeWindow = window
+        markWelcomeOnClose = markAsShownOnClose
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func closeWelcomeWindow(markAsShown: Bool) {
+        if markAsShown {
+            UserDefaults.standard.set(true, forKey: didShowWelcomeKey)
+        }
+
+        markWelcomeOnClose = false
+        welcomeWindow?.close()
+        welcomeWindow = nil
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSWindow === welcomeWindow else { return }
+
+        if markWelcomeOnClose {
+            UserDefaults.standard.set(true, forKey: didShowWelcomeKey)
+        }
+
+        welcomeWindow = nil
+        markWelcomeOnClose = false
+        NSApp.setActivationPolicy(.accessory)
     }
 }
