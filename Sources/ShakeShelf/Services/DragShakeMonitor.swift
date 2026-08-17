@@ -7,10 +7,18 @@ final class DragShakeMonitor {
     var onShake: ((CGPoint) -> Void)?
     var onStatusChange: ((String) -> Void)?
 
-    private var recognizer = DragShakeRecognizer()
+    private var recognizer: DragShakeRecognizer
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var lastStatusUpdate: CFTimeInterval = 0
+
+    init() {
+        recognizer = DragShakeRecognizer(sensitivity: ShakeShelfSettings.load().sensitivity)
+    }
+
+    func applySensitivity(_ sensitivity: ShakeSensitivity) {
+        recognizer = DragShakeRecognizer(sensitivity: sensitivity)
+    }
 
     func start() {
         stop()

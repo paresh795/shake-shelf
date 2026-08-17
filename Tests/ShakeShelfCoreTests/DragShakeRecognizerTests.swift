@@ -4,10 +4,12 @@ import XCTest
 final class DragShakeRecognizerTests: XCTestCase {
     func testRecognizesFastDraggedBackAndForthMotion() {
         var recognizer = DragShakeRecognizer(
-            window: 0.45,
-            minimumReversals: 4,
-            minimumTravelPerLeg: 12,
-            cooldown: 0.8
+            configuration: DragShakeConfiguration(
+                window: 0.45,
+                minimumReversals: 4,
+                minimumTravelPerLeg: 12,
+                cooldown: 0.8
+            )
         )
 
         let xs = [100, 122, 96, 124, 94, 126, 92]
@@ -37,5 +39,38 @@ final class DragShakeRecognizerTests: XCTestCase {
         recognizer.reset()
 
         XCTAssertFalse(recognizer.ingest(DragShakeSample(time: 0.10, x: 90)))
+    }
+
+    func testHighSensitivityRecognizesShorterShakes() {
+        var recognizer = DragShakeRecognizer(sensitivity: .high)
+
+        let xs = [100, 116, 102, 118, 100]
+        let results = xs.enumerated().map { index, x in
+            recognizer.ingest(DragShakeSample(time: Double(index) * 0.05, x: Double(x)))
+        }
+
+        XCTAssertTrue(results.contains(true))
+    }
+
+    func testLowSensitivityRejectsTheSameShake() {
+        var recognizer = DragShakeRecognizer(sensitivity: .low)
+
+        let xs = [100, 116, 102, 118, 100]
+        let results = xs.enumerated().map { index, x in
+            recognizer.ingest(DragShakeSample(time: Double(index) * 0.05, x: Double(x)))
+        }
+
+        XCTAssertFalse(results.contains(true))
+    }
+
+    func testSensitivityConfigurationsAreOrderedAndDistinct() {
+        let low = ShakeSensitivity.low.configuration
+        let medium = ShakeSensitivity.medium.configuration
+        let high = ShakeSensitivity.high.configuration
+
+        XCTAssertEqual(medium, DragShakeConfiguration.standard)
+        XCTAssertLessThan(high.minimumTravelPerLeg, medium.minimumTravelPerLeg)
+        XCTAssertLessThan(medium.minimumTravelPerLeg, low.minimumTravelPerLeg)
+        XCTAssertGreaterThan(high.minimumReversals, 0)
     }
 }
