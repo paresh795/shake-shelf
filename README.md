@@ -38,42 +38,40 @@ The ball's animations are built for feel *and* restraint: a rest-detected hover 
 
 ## Shelf modes
 
-<p align="center">
-  <table>
-    <tr>
-      <td width="50%" valign="top">
-        <img src="docs/assets/screenshots/stack.png" alt="Shake Shelf stack mode">
-        <br>
-        <strong>Stack mode</strong>
-        <br>
-        <sub>Drop files onto the shelf, then drag the stack out when you want all of them.</sub>
-      </td>
-      <td width="50%" valign="top">
-        <img src="docs/assets/screenshots/overview.png" alt="Shake Shelf overview mode">
-        <br>
-        <strong>Space overview</strong>
-        <br>
-        <sub>Press Space to spread files out. Drag one tile, remove one tile, or collapse back to the stack.</sub>
-      </td>
-    </tr>
-    <tr>
-      <td width="50%" valign="top">
-        <img src="docs/assets/screenshots/list.png" alt="Shake Shelf list mode">
-        <br>
-        <strong>List mode</strong>
-        <br>
-        <sub>Use the list when filenames matter: scroll, drag one file, copy one file, Quick Look, or remove it.</sub>
-      </td>
-      <td width="50%" valign="top">
-        <img src="docs/assets/screenshots/web-drop.png" alt="Dragging an image from the web into Shake Shelf">
-        <br>
-        <strong>Web and app drops</strong>
-        <br>
-        <sub>Drop images from browsers and apps when macOS provides a real file, image data, or file promise.</sub>
-      </td>
-    </tr>
-  </table>
-</p>
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/stack.png" alt="Shake Shelf stack mode">
+      <br>
+      <strong>Stack mode</strong>
+      <br>
+      <sub>Drop files onto the shelf, then drag the stack out when you want all of them.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/overview.png" alt="Shake Shelf overview mode">
+      <br>
+      <strong>Space overview</strong>
+      <br>
+      <sub>Press Space to spread files out. Drag one tile, remove one tile, or collapse back to the stack.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/list.png" alt="Shake Shelf list mode">
+      <br>
+      <strong>List mode</strong>
+      <br>
+      <sub>Use the list when filenames matter: scroll, drag one file, copy one file, Quick Look, or remove it.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/web-drop.png" alt="Dragging an image from the web into Shake Shelf">
+      <br>
+      <strong>Web and app drops</strong>
+      <br>
+      <sub>Drop images from browsers and apps when macOS provides a real file, image data, or file promise.</sub>
+    </td>
+  </tr>
+</table>
 
 ## What works
 
